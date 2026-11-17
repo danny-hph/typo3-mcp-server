@@ -6,6 +6,8 @@ namespace Hn\McpServer\Service;
 
 use TYPO3\CMS\Backend\Form\FormDataCompiler;
 use TYPO3\CMS\Backend\Form\FormDataGroup\TcaDatabaseRecord;
+use TYPO3\CMS\Backend\Form\FormDataProvider\TcaTtContentColPosItemsRestrictionByBackendLayout;
+use TYPO3\CMS\Backend\Form\FormDataProvider\TcaTtContentCtypeItemsRestrictionByBackendLayout;
 use TYPO3\CMS\Core\Http\NormalizedParams;
 use TYPO3\CMS\Core\Http\ServerRequest;
 use TYPO3\CMS\Core\Site\SiteFinder;
@@ -24,6 +26,11 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  */
 class SelectItemResolver
 {
+    private const COLUMN_RESTRICTION_PROVIDERS = [
+        TcaTtContentCtypeItemsRestrictionByBackendLayout::class,
+        TcaTtContentColPosItemsRestrictionByBackendLayout::class,
+    ];
+
     /**
      * Runtime cache for compiled form data, keyed by "table:pid"
      * @var array<string, array>
@@ -122,9 +129,11 @@ class SelectItemResolver
         // that is exactly wrong: it would make every submitted value resolve as
         // "allowed". We want the canonical item set, so suppress that affordance.
         $restoreTca = $this->disableNoMatchingValueElement($table);
+        $restoreProviders = $this->disableColumnRestrictionsWithoutColumn($table, $rowValues);
         try {
             $result = $formDataCompiler->compile($input, $formDataGroup);
         } finally {
+            $restoreProviders();
             $restoreTca();
         }
         $this->cache[$cacheKey] = $result;
@@ -161,6 +170,41 @@ class SelectItemResolver
                     unset($GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement']);
                 } else {
                     $GLOBALS['TCA'][$table]['columns'][$fieldName]['config']['disableNoMatchingValueElement'] = $original;
+                }
+            }
+        };
+    }
+
+    /**
+     * Without a colPos the core resolves the CType and colPos items for column 0
+     * and hides every type that column refuses. ContentColumnService reports the
+     * per-column limits instead.
+     *
+     * @param array<string, scalar> $rowValues
+     * @return callable(): void
+     */
+    private function disableColumnRestrictionsWithoutColumn(string $table, array $rowValues): callable
+    {
+        if ($table !== 'tt_content' || array_key_exists('colPos', $rowValues)) {
+            return static function (): void {};
+        }
+
+        $providers = &$GLOBALS['TYPO3_CONF_VARS']['SYS']['formEngine']['formDataGroup']['tcaDatabaseRecord'];
+        $originals = [];
+        foreach (self::COLUMN_RESTRICTION_PROVIDERS as $provider) {
+            if (!isset($providers[$provider])) {
+                continue;
+            }
+            $originals[$provider] = $providers[$provider]['disabled'] ?? null;
+            $providers[$provider]['disabled'] = true;
+        }
+
+        return static function () use ($originals): void {
+            foreach ($originals as $provider => $original) {
+                if ($original === null) {
+                    unset($GLOBALS['TYPO3_CONF_VARS']['SYS']['formEngine']['formDataGroup']['tcaDatabaseRecord'][$provider]['disabled']);
+                } else {
+                    $GLOBALS['TYPO3_CONF_VARS']['SYS']['formEngine']['formDataGroup']['tcaDatabaseRecord'][$provider]['disabled'] = $original;
                 }
             }
         };

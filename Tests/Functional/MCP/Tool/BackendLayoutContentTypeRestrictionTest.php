@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hn\McpServer\Tests\Functional\MCP\Tool;
 
 use Hn\McpServer\MCP\Tool\GetPageTool;
+use Hn\McpServer\MCP\Tool\Record\GetTableSchemaTool;
 use Hn\McpServer\Service\LanguageService as McpLanguageService;
 use Hn\McpServer\Service\SiteInformationService;
 use Hn\McpServer\Tests\Functional\AbstractFunctionalTest;
@@ -18,6 +19,7 @@ use TYPO3\CMS\Core\Utility\GeneralUtility;
  * show those limits and respect them like the page module does:
  *
  * - GetPage lists every column of the page's layout with the types it accepts
+ * - GetTableSchema does not hide a type just because column 0 refuses it
  *
  * Page 7 ("News") uses the page TSconfig layout below: image is only accepted in
  * the banner column 3, the main column 0 refuses it, the sidebar column 1 only
@@ -118,12 +120,61 @@ TSCONFIG;
         $this->assertStringContainsString('colPos 0 "Main Content Only": all types', $result->content[0]->text);
     }
 
+    /**
+     * Without a colPos, the schema used to be resolved for column 0, which
+     * refuses image, and reported the type as non-existent.
+     */
+    public function testSchemaDoesNotHideATypeThatColumnZeroRefuses(): void
+    {
+        $text = $this->schemaText(['table' => 'tt_content', 'type' => 'image', 'pid' => self::PAGE]);
+
+        $this->assertStringNotContainsString('does not exist or has been excluded', $text);
+        $this->assertStringContainsString('Type: image', $text);
+        $this->assertMatchesRegularExpression('/accept this type: colPos 3 "Banner"/', $text);
+        $this->assertStringContainsString('colPos 0 "Main"', $text);
+    }
+
+    public function testSchemaListsTheTypeAmongTheOptionsWithoutPid(): void
+    {
+        $text = $this->schemaText(['table' => 'tt_content', 'type' => 'image']);
+
+        $this->assertStringNotContainsString('does not exist or has been excluded', $text);
+        $this->assertStringContainsString('Type: image', $text);
+    }
+
+    public function testSchemaListsAllColumnsAsColPosOptions(): void
+    {
+        $text = $this->schemaText(['table' => 'tt_content', 'type' => 'text', 'pid' => self::PAGE]);
+
+        $colPosLine = $this->lineOf($text, 'colPos');
+        $this->assertStringContainsString('3 (Banner)', $colPosLine);
+        $this->assertStringContainsString('0 (Main)', $colPosLine);
+        $this->assertStringContainsString('1 (Sidebar)', $colPosLine);
+    }
+
     private function getPageTool(): GetPageTool
     {
         return new GetPageTool(
             GeneralUtility::makeInstance(SiteInformationService::class),
             GeneralUtility::makeInstance(McpLanguageService::class)
         );
+    }
+
+    private function schemaText(array $params): string
+    {
+        $result = GeneralUtility::makeInstance(GetTableSchemaTool::class)->execute($params);
+        $this->assertFalse($result->isError, json_encode($result->jsonSerialize()));
+        return $result->content[0]->text;
+    }
+
+    private function lineOf(string $text, string $field): string
+    {
+        foreach (preg_split('/\r?\n/', $text) as $line) {
+            if (preg_match('/(^|\W)' . preg_quote($field, '/') . '\b/', $line) && str_contains($line, '[Options:')) {
+                return $line;
+            }
+        }
+        $this->fail('No options line for ' . $field . ' in: ' . $text);
     }
 
     private function writeSiteConfigurationForRootPage(int $rootPageId): void
