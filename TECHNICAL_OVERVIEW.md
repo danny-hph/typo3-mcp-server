@@ -288,6 +288,17 @@ workspace preview link that shows the draft. `WriteTable` returns it right after
 `GetPage` and `GetPageTree` show both for pages. Details, token handling and cost:
 [Record URLs](Documentation/Architecture/RecordUrls.md).
 
+### Content Columns
+
+Backend layout columns can limit the content types they accept (`allowedContentTypes` /
+`disallowedContentTypes`, TYPO3 14.1+, also the `allowed.CType` / `disallowed.CType` keys of
+EXT:content_defender). `GetPage` lists every column (colPos) of the page's layout with the types it
+accepts. `GetTableSchema` offers every type of the page and, with a `pid`, names the columns that accept
+the requested type; a type is not hidden because column 0 refuses it. `WriteTable` refuses a content
+element in a column that does not accept its type, or (on create and when colPos changes) in a colPos
+that does not exist on the page, and names the columns that fit. Children of b13/container elements are
+left to the container's own column checks.
+
 ### Relation Handling
 
 Relations are transparently resolved and can be set using simple syntax:
